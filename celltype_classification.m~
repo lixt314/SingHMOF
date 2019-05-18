@@ -1,0 +1,468 @@
+function celltype_classification(pbmc_dataset,geneset,savefigure)
+addpath('tools')
+addpath('tools/bhtsne/')
+close all
+
+
+%%
+fname = sprintf('data/normalized_data_%s.mat', pbmc_dataset);
+if(~exist(fname,'file'))
+    %% load pbmc data
+    load(sprintf('data/Liver_%s.mat', pbmc_dataset));
+    pbmc_data = data; %#ok<*NODEF>
+    pbmc_sample = data.Properties.VariableNames;
+    pbmc_sample = strrep(pbmc_sample,'P1TLH_[ATGC]*_','P1TLH');
+    pbmc_sample = strrep(pbmc_sample,'P5TLH_','');
+    pbmc_sample = strrep(pbmc_sample,'1','1_4k');
+    
+    tmp = regexp(pbmc_sample,'(?<=[ATGC]*_[0-9]_).*','match');
+    pbmc_sample = [tmp{:}];
+ 
+ 
+    pbmc_sample = strcat('pbmc_',pbmc_sample);
+    
+    clear data;
+    %% merge and normalize
+    [pbmc_data] =...
+        normalizeData(pbmc_data);
+    data = [pbmc_data];
+    sample_id = [pbmc_sample];
+    save(fname,'data','sample_id','-v7.3');
+else
+    load(fname);
+end
+
+fname = sprintf('data/classified_data_%s_%s.mat', pbmc_dataset, geneset);
+if (~exist(fname,'file'))
+    %% restrict to 'merged' gene set
+    Xn=table2array(data);
+    genelist=data.Properties.RowNames   
+    [T]=sc_hvg(Xn,genelist,true,true);
+    % Highly variable genes (HVGenes), FDR<0.05
+    HVGenes=T.genes(T.fdr<0.05)
+    fname12 = sprintf('data/Inf_genes.mat');
+    if(~exist(fname12,'file'))
+     [~,ib] = intersect(genelist, HVGenes);
+     X=data{ib,:}';
+     [RANKED, WEIGHT] = infFS( X,[],0.5,0,0);
+     Inf_Index=ib(RANKED(1:300));
+     Inf_genes=data.Properties.RowNames(Inf_Index);
+     save(fname12,'Inf_genes');
+    else
+        load(fname12)
+    end
+%      fname13 = sprintf('data/SPEC_genes.mat');
+%     if(~exist(fname13,'file'))
+%      [~,ib] = intersect(genelist, HVGenes);
+%      X=data{ib,:}';
+%      W=pdist2(X,X);
+%      style=-1;
+%      
+%      [wFeat, SF] = fsSpectrum( W, X, style)
+%      [WW,II]=sort(wFeat,'descend');
+%      SPEC_Index=ib(II)
+%      WW(1:20)
+%      
+%      SPEC_genes=data.Properties.RowNames(SPEC_Index);
+%      
+%      save(fname13,'SPEC_genes');
+%     else
+%         load(fname13)
+%     end  
+%     asfdaf
+    genes = data.Properties.RowNames;
+    
+    markers = load('data/marker_genes1.mat');
+        
+    selected_genes=markers.genes;
+%     selected_genes = unique(union(selected_genes, SPEC_genes(1:20)));
+    selected_genes = unique(union(selected_genes, Inf_genes(1:100)));
+%         selected_genes = unique(union(selected_genes, table_s3.genes));
+%         selected_genes = unique(union(selected_genes, table_s12.genes));
+%         selected_genes = unique(union(selected_genes, markers.genes));
+       % [~,ia] = intersect(genes, selected_genes);  
+       [~,ia] = intersect(genes, selected_genes); 
+  
+    %C=3;
+    %[S,F] = SIMLR_Large_Scale(data{ia,:}',C,50);       
+    %size(S)
+    %size(F)
+    
+    tic
+    %ddas
+    %% run tSNE
+    
+    fname2 = sprintf('data/tsne_data_%s_%s_Fast.mat', pbmc_dataset, geneset);
+    if(~exist(fname2,'file'))
+         addpath('/public/home/zxl/Research/Estimate/estimation-of-immune-cell-content/tools/FIt-SNE-master');
+         %tsneX = tsne_p_bo(S);
+%          addpath(genpath('/public/home/zxl/Research/Estimate/drtoolbox'));
+%          [tsneX,~]=pca(data{ia,:}',2);
+%         tsneX = fast_tsne(data{ia,:}');%data{ia,:}'
+%         addpath('tools/bhtsne/');
+         tsneX = fast_tsne(data{ia,:}');
+        save(fname2,'tsneX');
+    else
+        load(fname2);
+    end
+   
+    %dist      = pdist2(tsneX,tsneX);
+    %[cluster] = cluster_dp(dist)
+    %cluster   = cluster';
+    epsilon=1.3;
+    ncells=15;
+    cluster = DBSCAN(tsneX,epsilon,ncells)
+    
+    cluster(cluster==-1) = 0;
+
+    load('colors.mat');
+
+
+    dbscan_cols = parula(length(unique(cluster)));
+    rng(0);
+    dbscan_cols = dbscan_cols(randperm(max(unique(cluster))),:);
+    dbscan_cols = [0.8*ones(1,3); dbscan_cols];
+
+    fig = figure(1);
+    clf
+    lims = [min(tsneX(:)) max(tsneX(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id,indication{ci}));
+        my_gscatter(tsneX(id,1),tsneX(id,2),cluster(id),dbscan_cols,symbs(ci),false,[],25,lims);
+    end
+    my_gscatter(tsneX(:,1),tsneX(:,2),cluster,[],{'none'},true,[],25,lims);
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+    fig.PaperPositionMode = 'auto';
+    fig.PaperUnits = 'centimeters';
+    fig.PaperSize = fig.PaperPosition(3:4);
+
+    fname = sprintf('figures/dbscan_clusters_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+        %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+        %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %% marker genes
+    fig = figure(2);
+    clf
+    [celltype_matrix, celltype_expression, cellnames] = ...
+        celltype_markers(data,tsneX,[2:10],0.3); 
+    fig.Color = 'w';
+    fig.Position = [0 0 800 800];
+    fig.PaperPositionMode = 'auto';
+    fig.PaperUnits = 'centimeters';
+    fig.PaperSize = fig.PaperPosition(3:4);
+    fname = sprintf('figures/marker_expression_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+        %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+        %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %% training data
+    training_celltype = assign_clusters(cluster,celltype_matrix,celltype_expression);
+
+
+    fprintf(1,'%d/%d celltypes found for classification training\n',sum(unique(training_celltype)~=0),9);
+   % id = setdiff([0:1 5:12],unique(training_celltype))+1;
+    %if ~isempty(id)
+    %    cellnames(id)
+  %      return;
+  %  end
+
+    %% plot training set
+    fig = figure(3);
+    clf;
+
+    lims = [min(tsneX(:)) max(tsneX(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id,indication{ci}));
+        my_gscatter(tsneX(id,1),tsneX(id,2),training_celltype(id),cols,symbs(ci),false,[],25,lims);
+    end
+   legend('Unknown','hepatocytes cells','T cells','Mature B cells','Plasma cells','Endothelial cells','Inflammatory monocyte/macrophages cells',...
+            'Non-inflammatory macrophages cells','Cholangiocyte cells','Stellate cells')
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+    fig.PaperPositionMode = 'auto';
+    fig.PaperUnits = 'centimeters';
+    fig.PaperSize = fig.PaperPosition(3:4);
+    fname = sprintf('figures/celltype_training_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+        %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+        %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %% classify
+    % Train deep autoencoder to map data
+%    fname5 = sprintf('data/Deep_data_%s_%s.mat', pbmc_dataset, geneset);
+%     if(~exist(fname5,'file'))
+%         no_dims=10;
+%       
+%         A=data{ia,:};
+%         A=A';
+%         addpath(genpath('/public/home/zxl/Research/Estimate/drtoolbox'));
+%         layers = [ceil(size(A, 2) * 1.2) + 5 max([ceil(size(A, 2) / 4) no_dims + 2]) + 3 max([ceil(size(A, 2) / 10) no_dims + 1]) no_dims];
+%         disp(['Network size: ' num2str(layers)]);
+% %             [mappedA, network, binary_data, mean_X, var_X] = train_autoencoder(A, net_structure);
+%         [network, mappedA] = train_deep_autoenc(A, layers, 0);
+%         save(fname5,'mappedA');
+%     else
+%         load(fname5);
+%     end
+ 
+    A=table2array(data(ia,:));
+    A=A';
+     %mapping.network = network;
+     %mapping.name = 'Autoencoder';
+     
+    [predicted_celltype,Testaccuracy] = MORF_classify_celltypes(A,training_celltype);
+    predicted_celltype=predicted_celltype';
+    Testaccuracy=size(find(training_celltype==predicted_celltype),2)/size(training_celltype,2)
+    %% plot classification result
+    fig = figure(4);
+    clf;
+    lims = [min(tsneX(:)) max(tsneX(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id,indication{ci}));
+        my_gscatter(tsneX(id,1),tsneX(id,2),predicted_celltype(id),cols,symbs(ci),false,[],25,lims);
+    end
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+    fig.PaperPositionMode = 'auto';
+    fig.PaperUnits = 'centimeters';
+    fig.PaperSize = fig.PaperPosition(3:4);
+    fname = sprintf('figures/celltype_classified_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+        %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+        %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+    %%
+dddd
+    fname3 = sprintf('data/classified_data_%s_%s.mat', pbmc_dataset, geneset);
+    save(fname3,...
+        'tsneX','cluster',...
+        'sample_id','predicted_celltype','cellnames',...
+        '-v7.3');
+
+end
+
+%%
+% =========================================================================
+% =========================================================================
+% do separate classification for T cells
+% =========================================================================
+% =========================================================================
+%%
+fname = sprintf('data/classified_data_%s_%s_tcell.mat', pbmc_dataset, geneset);
+if (~exist(fname,'file'))
+    fname3 = sprintf('data/classified_data_%s_%s.mat', pbmc_dataset, geneset);
+    load(fname3)
+    tcell_data = data(:,predicted_celltype==5);
+     ia = getGeneSet(geneset,data)
+    %% run tSNE
+    fname4 = sprintf('data/tsne_data_%s_%s_tcell.mat', pbmc_dataset, geneset);
+    if exist(fname4,'file')
+        load(fname4);
+    end
+    C=5;
+    [S,F] = SIMLR_Large_Scale(tcell_data{ia,:}',C,50);  
+    if(~exist(fname4,'file') || size(tsne_tcell,1)~=size(tcell_data,2))
+        addpath('/public/home/zxl/Research/Estimate/estimation-of-immune-cell-content/tools/FIt-SNE-master');
+        tsne_tcell = tsne_p_bo(S);
+        %tsneX = fast_tsne(data{ia,:}');%data{ia,:}'
+%         save(fname2,'tsneX');
+%         addpath('tools/bhtsne/');
+%         tsne_tcell = fast_tsne(tcell_data{ia,:}');
+        save(fname4,'tsne_tcell');
+    end
+
+    %% DBSCAN
+    
+    load('colors.mat');
+       
+    dist      = pdist2(tsne_tcell,tsne_tcell);
+    [cluster_tcell] = cluster_dp(dist)
+    cluster_tcell   = cluster_tcell';
+    %cluster = DBSCAN(tsneX,epsilon,ncells)
+    
+    cluster_tcell(cluster_tcell==-1) = 0;
+
+    dbscan_cols = parula(length(unique(cluster_tcell)));
+    rng(0);
+    dbscan_cols = [0.8*ones(1,3); dbscan_cols];
+
+    fig = figure(4);
+    clf;
+
+    lims = [min(tsne_tcell(:)) max(tsne_tcell(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id(predicted_celltype==5),indication{ci}));
+        my_gscatter(tsne_tcell(id,1),tsne_tcell(id,2),cluster_tcell(id),dbscan_cols,symbs(ci),false,[],35,lims);
+    end
+    my_gscatter(tsne_tcell(:,1),tsne_tcell(:,2),cluster_tcell,[],{'none'},true,[],35,lims);
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+
+    fname = sprintf('figures/dbscan_clusters_tcells_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+        print(gcf,'-dpng',[fname '.png'],'-r300');
+        %     print(gcf,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %%
+    fig = figure(5);
+    clf;
+    [celltype_matrix_tcell, celltype_expression_tcell, cellnames, training_celltype_tcell] = ...
+        celltype_markers(tcell_data, tsne_tcell,11:13,0.3);
+    fname = sprintf('figures/marker_expression_tcells_%s_%s', pbmc_dataset, geneset);
+    fig.Color = 'w';
+    fig.Position = [0 0 800 800];
+    fig.PaperPositionMode = 'auto';
+    fig.PaperUnits = 'centimeters';
+    fig.PaperSize = fig.PaperPosition(3:4);
+
+    if(savefigure)
+    %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+    %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %%
+    training_celltype_tcell = assign_clusters(cluster_tcell,...
+        celltype_matrix_tcell,celltype_expression_tcell);
+    fprintf(1,' %d/%d End cell subtypes found for classification training\n',sum(unique(training_celltype_tcell)~=0),3);
+    %cellnames(setdiff(11:13,unique(training_celltype_tcell))+1)
+
+    %
+    fig = figure(6);
+    clf;
+    lims = [min(tsne_tcell(:)) max(tsne_tcell(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id(predicted_celltype==5),indication{ci}));
+        my_gscatter(tsne_tcell(id,1),tsne_tcell(id,2),training_celltype_tcell(id),cols,symbs(ci),false,[],35,lims);
+    end
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+    fname = sprintf('figures/celltype_training_tcells_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+    %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+    %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %%
+     fname8 = sprintf('data/Deep_data_%s_%s_tcell.mat', pbmc_dataset, geneset);
+    if(~exist(fname8,'file'))
+        no_dims=10;
+      
+        A=tcell_data{ia,:};
+        A=A';
+        addpath(genpath('/public/home/zxl/Research/Estimate/drtoolbox'));
+        layers = [ceil(size(A, 2) * 1.2) + 5 max([ceil(size(A, 2) / 4) no_dims + 2]) + 3 max([ceil(size(A, 2) / 10) no_dims + 1]) no_dims];
+        disp(['Network size: ' num2str(layers)]);
+%             [mappedA, network, binary_data, mean_X, var_X] = train_autoencoder(A, net_structure);
+        [network, mappedA] = train_deep_autoenc(A, layers, 0);
+        save(fname8,'mappedA');
+    else
+        load(fname8);
+    end
+ 
+   
+     %mapping.network = network;
+     %mapping.name = 'Autoencoder';
+   [predicted_tcell] = MORF_classify_celltypes(mappedA,training_celltype_tcell);
+    
+    %[predicted_tcell, trainedClassifier_tcell] = ...
+    %    classify_celltypes(tcell_data(ia,:),training_celltype_tcell);
+
+    %
+    fig = figure(7);
+    clf;
+
+    lims = [min(tsne_tcell(:)) max(tsne_tcell(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id(predicted_celltype==5),indication{ci}));
+        my_gscatter(tsne_tcell(id,1),tsne_tcell(id,2),predicted_tcell(id),cols,symbs(ci),false,[],35,lims);
+    end
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+    fname = sprintf('figures/celltype_classified_tcells_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+    %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+    %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+    %%
+    celltype = predicted_celltype;
+    celltype(predicted_celltype==5) = predicted_tcell;
+
+    %%
+    fig = figure(8);
+    clf;
+    indication = {'melanoma','pbmc','ascites'};
+    lims = [min(tsneX(:)) max(tsneX(:))];
+    for ci=1:length(indication)
+        id = ~cellfun(@isempty,strfind(sample_id,indication{ci}));
+        my_gscatter(tsneX(id,1),tsneX(id,2),celltype(id),cols,symbs(ci),false,[],25,lims);
+    end
+
+    fig.Color = 'w';
+    fig.Position = [0 0 900 800];
+    fname = sprintf('figures/celltype_classified_all_%s_%s', pbmc_dataset, geneset);
+    if(savefigure)
+    %     fig.Renderer = 'painters';
+        print(fig,'-dpng',[fname '.png'],'-r300');
+        saveas(fig,[fname '.fig']);
+    %     print(fig,'-dpdf',[fname '.pdf'],'-r300');
+    end
+
+    %%
+    fname5 = sprintf('data/classified_data_%s_%s_tcell.mat', pbmc_dataset, geneset);
+    save(fname5,...
+        'tsneX','cluster',...
+        'sample_id','celltype','cellnames',...
+        '-v7.3');
+end
+% fname = sprintf('data/normalized_data_%s.mat', pbmc_dataset);
+% load(fname);
+% fname3 = sprintf('data/classified_data_%s_%s.mat', pbmc_dataset, geneset);
+% load(fname3);
+% 
+% Index=find(predicted_celltype==0)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Unknown')
+% Index=find(predicted_celltype==1)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','hepatocytes cells')
+% Index=find(predicted_celltype==2)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','T cells')
+% Index=find(predicted_celltype==3)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Mature B')
+% Index=find(predicted_celltype==4)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Plasma cells')
+% Index=find(predicted_celltype==5)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Endothelial cells')
+% Index=find(predicted_celltype==6)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Inflammatory monocyte/macrophages cells')
+% Index=find(predicted_celltype==7)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Non-inflammatory macrophages cells')
+% Index=find(predicted_celltype==8)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Cholangiocyte cells')
+% Index=find(predicted_celltype==9)
+% sample_id(Index) = strrep(sample_id(Index),'pbmc_4k','Stellate cells')
+%    save(fname,'data','sample_id','-v7.3');
