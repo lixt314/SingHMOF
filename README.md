@@ -6,4 +6,5 @@ The advent of single-cell RNA-seq provides unparalleled opportunities for elucid
 
 
 Dataset
+
 We collected single-cell RNA-seq liver data from Gene Expression Omnibus (GEO:https://www.ncbi.nlm.nih.gov/geo/) through accession number GSE115469. The liver data contains the transcriptional profiles of 8444 parenchymal and non-parenchymal cells of five healthy neurologically deceased donors by 10X Genomics \cite{macparland2018single}.
